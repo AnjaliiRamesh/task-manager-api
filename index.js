@@ -5,6 +5,8 @@ require('dotenv').config();
 const sequelize = require('./config/db.postgres');
 const connectMongo = require('./config/db.mongo');
 const errorHandler = require('./middleware/error.middleware');
+const authRoutes = require('./routes/auth.routes');
+const taskRoutes = require('./routes/task.routes');
 
 const app = express();
 
@@ -17,6 +19,18 @@ app.get('/', (req, res) => {
   res.json({ message: 'Task Manager API is running!' });
 });
 
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/tasks', taskRoutes);
+
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Route not found',
+  });
+});
+
 // Error Handler
 app.use(errorHandler);
 
@@ -25,18 +39,14 @@ const PORT = process.env.PORT || 3000;
 
 const startServer = async () => {
   try {
-    // Test PostgreSQL connection
     await sequelize.authenticate();
     console.log('PostgreSQL connected successfully');
 
-    // Sync models to database (creates tables if they dont exist)
     await sequelize.sync({ alter: true });
     console.log('PostgreSQL models synced');
 
-    // Connect MongoDB
     await connectMongo();
 
-    // Start listening
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });
