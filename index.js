@@ -7,6 +7,7 @@ const connectMongo = require('./config/db.mongo');
 const errorHandler = require('./middleware/error.middleware');
 const authRoutes = require('./routes/auth.routes');
 const taskRoutes = require('./routes/task.routes');
+const categoryRoutes = require('./routes/category.routes');
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.get('/', (req, res) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/categories', categoryRoutes);
 
 // 404 Handler
 app.use((req, res) => {
@@ -39,14 +41,17 @@ const PORT = process.env.PORT || 3000;
 
 const startServer = async () => {
   try {
+    // Connect PostgreSQL
     await sequelize.authenticate();
     console.log('PostgreSQL connected successfully');
 
     await sequelize.sync({ alter: true });
     console.log('PostgreSQL models synced');
 
+    // Connect MongoDB
     await connectMongo();
 
+    // Start server
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });

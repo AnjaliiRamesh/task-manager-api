@@ -32,6 +32,8 @@ const taskSchema = Joi.object({
   status: Joi.string().valid('pending', 'completed').optional().messages({
     'any.only': 'Status must be either pending or completed',
   }),
+  category: Joi.string().optional().allow(null, ''),
+  tags: Joi.array().items(Joi.string()).optional(),
 });
 
 const updateTaskSchema = Joi.object({
@@ -43,6 +45,15 @@ const updateTaskSchema = Joi.object({
   status: Joi.string().valid('pending', 'completed').optional().messages({
     'any.only': 'Status must be either pending or completed',
   }),
+  category: Joi.string().optional().allow(null, ''),
+  tags: Joi.array().items(Joi.string()).optional(),
+});
+
+const categorySchema = Joi.object({
+  name: Joi.string().required().messages({
+    'any.required': 'Category name is required',
+  }),
+  description: Joi.string().optional().allow(''),
 });
 
 module.exports = {
@@ -50,4 +61,5 @@ module.exports = {
   loginSchema,
   taskSchema,
   updateTaskSchema,
+  categorySchema,
 };

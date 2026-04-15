@@ -23,6 +23,15 @@ const taskSchema = new mongoose.Schema(
       type: Number,
       required: [true, 'User ID is required'],
     },
+    category: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Category',
+      default: null,
+    },
+    tags: {
+      type: [String],
+      default: [],
+    },
   },
   {
     timestamps: true,
