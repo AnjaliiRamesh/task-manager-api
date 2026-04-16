@@ -1,9 +1,7 @@
 # Task Manager API
 
-A RESTful API for a Task Management application built with Node.js/Express.js, PostgreSQL, and MongoDB.
-
-# Demo video link
-https://www.loom.com/share/a3b5a06fd2fa4327b2b2be508eb07b55
+A RESTful API for a Task Management application built with Node.js/Express.js, PostgreSQL, and MongoDB. Features JWT authentication, real-time reminders, task categorization, and webhook integrations.
+# Demo video Link
 
 ## Tech Stack
 
@@ -14,6 +12,7 @@ https://www.loom.com/share/a3b5a06fd2fa4327b2b2be508eb07b55
 - **Authentication:** JWT (jsonwebtoken)
 - **Password Hashing:** bcryptjs
 - **Validation:** Joi
+- **HTTP Requests:** Axios
 - **Environment Variables:** dotenv
 
 ## Folder Structure
@@ -23,23 +22,33 @@ task-manager-api/
 │
 ├── config/
 │   ├── db.postgres.js       # PostgreSQL connection
-│   └── db.mongo.js          # MongoDB connection
+│   ├── db.mongo.js          # MongoDB connection
+│   └── agenda.js            # In-memory reminder store
 │
 ├── controllers/
 │   ├── auth.controller.js   # Register, login, profile logic
-│   └── task.controller.js   # Task CRUD logic
+│   ├── task.controller.js   # Task CRUD logic
+│   └── category.controller.js # Category CRUD logic
+│
+├── jobs/
+│   └── reminder.job.js      # Reminder scheduling logic
 │
 ├── middleware/
 │   ├── auth.middleware.js   # JWT verification
 │   └── error.middleware.js  # Global error handler
 │
 ├── models/
-│   ├── user.model.js        # PostgreSQL User model (Sequelize)
-│   └── task.model.js        # MongoDB Task model (Mongoose)
+│   ├── user.model.js        # PostgreSQL User model
+│   ├── task.model.js        # MongoDB Task model
+│   └── category.model.js    # MongoDB Category model
 │
 ├── routes/
 │   ├── auth.routes.js       # /api/auth endpoints
-│   └── task.routes.js       # /api/tasks endpoints
+│   ├── task.routes.js       # /api/tasks endpoints
+│   └── category.routes.js   # /api/categories endpoints
+│
+├── services/
+│   └── webhook.service.js   # Webhook + retry logic
 │
 ├── validators/
 │   └── validators.js        # Joi validation schemas
@@ -51,11 +60,26 @@ task-manager-api/
 
 ## Design Decisions
 
-- **PostgreSQL for Users:** User data is structured and relational, making SQL a natural fit.
-- **MongoDB for Tasks:** Tasks are flexible documents that may evolve over time, making NoSQL ideal.
-- **JWT Authentication:** Stateless authentication that scales well.
-- **Joi Validation:** Centralized validation schemas keep controllers clean.
-- **Global Error Handler:** Single middleware handles all errors consistently.
+### PostgreSQL for Users
+User data is structured and relational — always an ID, email and password — making SQL a natural fit. Sequelize ORM allows us to write JavaScript instead of raw SQL queries.
+
+### MongoDB for Tasks and Categories
+Tasks and categories are flexible documents that may evolve over time, with optional fields like description, tags and category references. This suits MongoDB's schema-less nature perfectly.
+
+### JWT Authentication
+Stateless authentication that scales well. Tokens contain user ID and email, expire in 7 days, and are verified on every protected request via middleware.
+
+### Task Categorization
+Categories are dynamically created by users (not pre-defined) because this gives users full flexibility to organize tasks their way. Each category belongs to a specific user, maintaining data isolation.
+
+### Tag Management
+Tags are stored as a free-form string array directly on the task document. This keeps the data model simple and avoids unnecessary joins. Tags can be filtered using MongoDB's `$in` operator.
+
+### Reminder Scheduling
+Reminders use an in-memory setTimeout-based system. When a task is created or updated with a due date, a reminder is scheduled for 1 hour before. The timeout reference is stored in memory so it can be cancelled if the task is updated or completed. Note: reminders are lost on server restart — for production, a persistent queue like BullMQ with Redis would be used.
+
+### Webhook Retry Logic
+When a task is completed, a webhook is sent to the configured URL with exponential backoff retry logic (3 attempts: 1s, 2s, 4s delays). This handles temporary network failures gracefully.
 
 ## Prerequisites
 
@@ -80,20 +104,23 @@ npm install
 
 ### 3. Set up PostgreSQL
 
-- Install PostgreSQL and create a database:
-
 ```bash
 psql -U postgres
 CREATE DATABASE taskmanager;
 \q
 ```
 
-### 4. Set up MongoDB
+### 4. Set up MongoDB Atlas
 
 - Create a free cluster on [MongoDB Atlas](https://cloud.mongodb.com)
 - Get your connection string
 
-### 5. Configure environment variables
+### 5. Get a Webhook URL
+
+- Go to [webhook.site](https://webhook.site)
+- Copy your unique URL
+
+### 6. Configure environment variables
 
 Create a `.env` file in the root directory:
 
@@ -105,11 +132,13 @@ PG_DATABASE=taskmanager
 PG_USER=postgres
 PG_PASSWORD=yourpassword
 MONGO_URI=mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/taskmanager
+AGENDA_DB_URI=mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/taskmanager
 JWT_SECRET=your_super_secret_jwt_key
 JWT_EXPIRES_IN=7d
+WEBHOOK_URL=https://webhook.site/your-unique-url
 ```
 
-### 6. Run the application
+### 7. Run the application
 
 ```bash
 # Development mode (with auto-restart)
@@ -144,29 +173,19 @@ Authorization: Bearer <your_jwt_token>
 ```
 POST /api/auth/register
 ```
-Request Body:
+Body:
 ```json
 {
   "email": "user@example.com",
   "password": "123456"
 }
 ```
-Success Response (201):
+Response (201):
 ```json
 {
   "success": true,
   "message": "User registered successfully",
-  "data": {
-    "id": 1,
-    "email": "user@example.com"
-  }
-}
-```
-Error Response (400):
-```json
-{
-  "success": false,
-  "message": "Email already registered"
+  "data": { "id": 1, "email": "user@example.com" }
 }
 ```
 
@@ -176,24 +195,21 @@ Error Response (400):
 ```
 POST /api/auth/login
 ```
-Request Body:
+Body:
 ```json
 {
   "email": "user@example.com",
   "password": "123456"
 }
 ```
-Success Response (200):
+Response (200):
 ```json
 {
   "success": true,
   "message": "Login successful",
   "data": {
     "token": "eyJhbGciOiJIUzI1NiIs...",
-    "user": {
-      "id": 1,
-      "email": "user@example.com"
-    }
+    "user": { "id": 1, "email": "user@example.com" }
   }
 }
 ```
@@ -204,20 +220,88 @@ Success Response (200):
 ```
 GET /api/auth/profile
 ```
-Headers:
-```
-Authorization: Bearer <token>
-```
-Success Response (200):
+Response (200):
 ```json
 {
   "success": true,
   "data": {
     "id": 1,
     "email": "user@example.com",
-    "createdAt": "2024-01-01T00:00:00.000Z"
+    "createdAt": "2026-01-01T00:00:00.000Z"
   }
 }
+```
+
+---
+
+### Category Endpoints (All Protected)
+
+#### Create Category
+```
+POST /api/categories
+```
+Body:
+```json
+{
+  "name": "Work",
+  "description": "Work related tasks"
+}
+```
+Response (201):
+```json
+{
+  "success": true,
+  "message": "Category created successfully",
+  "data": {
+    "_id": "...",
+    "name": "Work",
+    "description": "Work related tasks",
+    "userId": 1
+  }
+}
+```
+
+---
+
+#### Get All Categories
+```
+GET /api/categories
+```
+Response (200):
+```json
+{
+  "success": true,
+  "count": 3,
+  "data": [...]
+}
+```
+
+---
+
+#### Get Single Category
+```
+GET /api/categories/:id
+```
+
+---
+
+#### Update Category
+```
+PATCH /api/categories/:id
+```
+Body:
+```json
+{
+  "name": "Updated Name",
+  "description": "Updated description"
+}
+```
+
+---
+
+#### Delete Category
+```
+DELETE /api/categories/:id
 ```
 
 ---
@@ -228,53 +312,60 @@ Success Response (200):
 ```
 POST /api/tasks
 ```
-Headers:
-```
-Authorization: Bearer <token>
-```
-Request Body:
+Body:
 ```json
 {
-  "title": "My Task",
-  "description": "Task description",
-  "dueDate": "2024-12-31",
-  "status": "pending"
+  "title": "Fix critical bug",
+  "description": "Fix the login page bug",
+  "dueDate": "2026-12-31T10:00:00.000Z",
+  "status": "pending",
+  "category": "<category_id>",
+  "tags": ["High Priority", "Bug Fix", "Client A"]
 }
 ```
-Success Response (201):
+Response (201):
 ```json
 {
   "success": true,
   "message": "Task created successfully",
   "data": {
-    "_id": "mongodbid",
-    "title": "My Task",
-    "description": "Task description",
-    "dueDate": "2024-12-31T00:00:00.000Z",
+    "_id": "...",
+    "title": "Fix critical bug",
     "status": "pending",
-    "userId": 1,
-    "createdAt": "2024-01-01T00:00:00.000Z",
-    "updatedAt": "2024-01-01T00:00:00.000Z"
+    "category": "<category_id>",
+    "tags": ["High Priority", "Bug Fix", "Client A"],
+    "userId": 1
   }
 }
 ```
+Note: If dueDate is provided, a reminder is automatically scheduled for 1 hour before.
 
 ---
 
-#### Get All Tasks
+#### Get All Tasks (with optional filters)
 ```
 GET /api/tasks
+GET /api/tasks?category=<category_id>
+GET /api/tasks?tags=High Priority,Bug Fix
+GET /api/tasks?category=<category_id>&tags=Bug Fix
 ```
-Headers:
-```
-Authorization: Bearer <token>
-```
-Success Response (200):
+Response (200):
 ```json
 {
   "success": true,
   "count": 1,
-  "data": [...]
+  "data": [
+    {
+      "_id": "...",
+      "title": "Fix critical bug",
+      "category": {
+        "_id": "...",
+        "name": "Work",
+        "description": "Work related tasks"
+      },
+      "tags": ["High Priority", "Bug Fix", "Client A"]
+    }
+  ]
 }
 ```
 
@@ -284,24 +375,6 @@ Success Response (200):
 ```
 GET /api/tasks/:id
 ```
-Headers:
-```
-Authorization: Bearer <token>
-```
-Success Response (200):
-```json
-{
-  "success": true,
-  "data": {...}
-}
-```
-Error Response (403):
-```json
-{
-  "success": false,
-  "message": "Access denied. This task belongs to another user."
-}
-```
 
 ---
 
@@ -309,25 +382,15 @@ Error Response (403):
 ```
 PATCH /api/tasks/:id
 ```
-Headers:
-```
-Authorization: Bearer <token>
-```
-Request Body (all fields optional):
+Body (all fields optional):
 ```json
 {
   "title": "Updated title",
-  "status": "completed"
+  "status": "completed",
+  "tags": ["Done"]
 }
 ```
-Success Response (200):
-```json
-{
-  "success": true,
-  "message": "Task updated successfully",
-  "data": {...}
-}
-```
+Note: Setting status to "completed" triggers a webhook notification and cancels any scheduled reminder.
 
 ---
 
@@ -335,17 +398,32 @@ Success Response (200):
 ```
 DELETE /api/tasks/:id
 ```
-Headers:
-```
-Authorization: Bearer <token>
-```
-Success Response (200):
+Note: Deleting a task automatically cancels any scheduled reminder.
+
+---
+
+## Event-Driven Features
+
+### Task Reminders
+When a task is created or updated with a due date, a reminder is automatically scheduled for 1 hour before the due date. The reminder:
+- Logs full notification details to the console
+- Sends a POST request to the configured webhook URL
+- Is automatically cancelled if the task is completed or deleted
+
+### Webhook on Completion
+When a task status changes to "completed", a POST request is sent to the configured webhook URL with this payload:
 ```json
 {
-  "success": true,
-  "message": "Task deleted successfully"
+  "event": "TASK_COMPLETED",
+  "taskId": "...",
+  "title": "Task title",
+  "completionDate": "2026-01-01T00:00:00.000Z",
+  "userId": 1,
+  "category": "...",
+  "tags": ["..."]
 }
 ```
+Retry logic: 3 attempts with exponential backoff (1s, 2s, 4s delays).
 
 ---
 
@@ -360,6 +438,3 @@ Success Response (200):
 | 403 | Forbidden (wrong user) |
 | 404 | Not Found |
 | 500 | Internal Server Error |
-
-
-
