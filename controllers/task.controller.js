@@ -46,7 +46,6 @@ const getAllTasks = async (req, res, next) => {
   try {
     const { category, tags } = req.query;
 
-    // Build filter object
     const filter = { userId: req.user.id };
 
     if (category) {
@@ -128,38 +127,45 @@ const updateTask = async (req, res, next) => {
       });
     }
 
-    const updatedTask = await Task.findByIdAndUpdate(
-      req.params.id,
-      { $set: req.body },
-      { new: true, runValidators: true }
-    );
+    // Update fields manually
+    if (req.body.title !== undefined) task.title = req.body.title;
+    if (req.body.description !== undefined) task.description = req.body.description;
+    if (req.body.dueDate !== undefined) task.dueDate = req.body.dueDate;
+    if (req.body.status !== undefined) task.status = req.body.status;
+    if (req.body.category !== undefined) task.category = req.body.category;
+    if (req.body.tags !== undefined) task.tags = req.body.tags;
 
-    // Handle reminder updates
-    if (req.body.dueDate) {
-      // Due date changed - reschedule reminder
-      await scheduleReminder(updatedTask);
+    // Save the updated task
+    await task.save();
+
+    // If due date changed - reschedule reminder
+    if (req.body.dueDate !== undefined) {
+      await scheduleReminder(task);
     }
 
+    // If task is completed
     if (req.body.status === 'completed') {
-      // Task completed - cancel reminder
-      await cancelReminder(task._id.toString());
+      // Cancel reminder if task has due date
+      if (task.dueDate) {
+        cancelReminder(task._id.toString());
+      }
 
       // Send webhook notification
       await sendWebhook({
         event: 'TASK_COMPLETED',
-        taskId: updatedTask._id.toString(),
-        title: updatedTask.title,
+        taskId: task._id.toString(),
+        title: task.title,
         completionDate: new Date().toISOString(),
-        userId: updatedTask.userId,
-        category: updatedTask.category,
-        tags: updatedTask.tags,
+        userId: task.userId,
+        category: task.category || null,
+        tags: task.tags || [],
       });
     }
 
     return res.status(200).json({
       success: true,
       message: 'Task updated successfully',
-      data: updatedTask,
+      data: task,
     });
   } catch (error) {
     next(error);
@@ -185,8 +191,10 @@ const deleteTask = async (req, res, next) => {
       });
     }
 
-    // Cancel any scheduled reminder
-    await cancelReminder(task._id.toString());
+    // Cancel any scheduled reminder if task has due date
+    if (task.dueDate) {
+      cancelReminder(task._id.toString());
+    }
 
     await Task.findByIdAndDelete(req.params.id);
 
